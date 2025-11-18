@@ -38,4 +38,4 @@ This repository includes `webcam_mrz_scanner.py`, a standalone script extracted 
    ```bash
    python webcam_mrz_scanner.py
    ```
-4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early.
+4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector now normalizes lighting and suppresses busy backgrounds automatically, so it can find cards even when the surface behind the document is not uniform.

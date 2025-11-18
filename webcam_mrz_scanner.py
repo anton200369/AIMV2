@@ -107,16 +107,43 @@ def order_points(pts: np.ndarray) -> np.ndarray:
     return rect
 
 
+def _enhance_card_edges(frame: np.ndarray) -> np.ndarray:
+    """Light-normalized edge map to handle non-uniform backgrounds."""
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
+
+    smoothed = cv2.bilateralFilter(gray, d=7, sigmaColor=50, sigmaSpace=50)
+
+    background = cv2.medianBlur(smoothed, 31)
+    shadow_free = cv2.subtract(smoothed, background)
+    shadow_free = cv2.normalize(shadow_free, None, 0, 255, cv2.NORM_MINMAX)
+
+    edged = cv2.Canny(shadow_free, 40, 140)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    edged = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel, iterations=2)
+    return edged
+
+
+def _mask_candidate_regions(frame: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (7, 7), 0)
+    norm = cv2.normalize(blur, None, 0, 255, cv2.NORM_MINMAX)
+    thr = cv2.adaptiveThreshold(norm, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 35, 5)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+    closed = cv2.morphologyEx(thr, cv2.MORPH_CLOSE, kernel, iterations=2)
+    return closed
+
+
 def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.02) -> Optional[np.ndarray]:
     """Return 4-point approx contour of detected card or None."""
 
-    img = frame.copy()
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edged = cv2.Canny(blur, 50, 150)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel)
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    edge_map = _enhance_card_edges(frame)
+    mask = _mask_candidate_regions(frame)
+    combined = cv2.bitwise_or(edge_map, mask)
+
+    contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
 
@@ -128,10 +155,26 @@ def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.02) -> Option
         if area < min_area:
             continue
         peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        approx = cv2.approxPolyDP(c, 0.018 * peri, True)
         if len(approx) == 4:
-            return approx.reshape(4, 2)
+            aspect = _aspect_ratio_from_quad(approx.reshape(4, 2))
+            if 1.2 <= aspect <= 1.9 or aspect >= 0.5:
+                return approx.reshape(4, 2)
     return None
+
+
+def _aspect_ratio_from_quad(pts: np.ndarray) -> float:
+    rect = order_points(pts.reshape(4, 2))
+    (tl, tr, br, bl) = rect
+    widthA = np.linalg.norm(br - bl)
+    widthB = np.linalg.norm(tr - tl)
+    heightA = np.linalg.norm(tr - br)
+    heightB = np.linalg.norm(tl - bl)
+    width = max(widthA, widthB)
+    height = max(heightA, heightB)
+    if height == 0:
+        return 0.0
+    return width / height
 
 
 def four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
