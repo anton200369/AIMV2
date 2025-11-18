@@ -293,6 +293,9 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
 
                 elif state == "BACK":
                     mrz_box, mrz_roi_img, debug_mask = detect_mrz_region(warped)
+                    if debug_mask is not None and debug_mask.ndim == 2:
+                        debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+
                     warped_vis = cv2.resize(warped, (1000, 630))
 
                     if mrz_box is not None:
@@ -325,6 +328,10 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
 
             if show_debug_mask and card_cnt is None:
                 debug_mask = _build_card_mask(frame)
+
+            if debug_mask is not None:
+                if debug_mask.ndim == 2:
+                    debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
                 debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
 
             if debug_mask is not None:
