@@ -160,11 +160,41 @@ def four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
 # ----------------------------
 # Segmentation & OCR helpers
 # ----------------------------
-haar_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-face_cascade = cv2.CascadeClassifier(haar_path)
+def _load_face_cascade() -> Optional[cv2.CascadeClassifier]:
+    """Load Haar cascade for face detection.
+
+    Looks for an override via ``FACE_CASCADE_PATH``; otherwise uses the
+    ``cv2.data.haarcascades`` directory. Returns ``None`` if the file is
+    missing or cannot be loaded so downstream logic can fall back to a
+    heuristic crop instead of crashing.
+    """
+
+    custom = os.getenv("FACE_CASCADE_PATH")
+    if custom and os.path.exists(custom):
+        cascade = cv2.CascadeClassifier(custom)
+        if not cascade.empty():
+            return cascade
+
+    default_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+    if os.path.exists(default_path):
+        cascade = cv2.CascadeClassifier(default_path)
+        if not cascade.empty():
+            return cascade
+
+    print(
+        "⚠️ Haar cascade for face detection not found or failed to load. "
+        "Set FACE_CASCADE_PATH to a valid XML file to enable face localization."
+    )
+    return None
+
+
+face_cascade = _load_face_cascade()
 
 
 def detect_face_refine(warped: np.ndarray) -> Optional[np.ndarray]:
+    if face_cascade is None:
+        return None
+
     gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
     if len(faces) == 0:

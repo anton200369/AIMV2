@@ -28,10 +28,11 @@ This repository includes `webcam_mrz_scanner.py`, a standalone script extracted 
 ## Running the scanner
 
 1. Confirm your webcam is connected and note its index (default is `0`).
-2. (Optional) Set the camera index and Tesseract path via environment variables:
+2. (Optional) Set the camera index, Tesseract path, and face cascade override via environment variables:
    ```bash
    export CAM_INDEX=0
    export TESSERACT_CMD="/usr/bin/tesseract"  # adjust if needed
+   export FACE_CASCADE_PATH="/path/to/haarcascade_frontalface_default.xml"  # only if OpenCV's bundled cascade is missing
    ```
 3. Launch the scanner:
    ```bash
