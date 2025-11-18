@@ -305,6 +305,8 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                     mrz_box, mrz_roi_img, debug_mask = detect_mrz_region(warped)
                     if debug_mask is not None:
                         debug_mask = _ensure_bgr(debug_mask)
+                    if debug_mask is not None and debug_mask.ndim == 2:
+                        debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
 
                     warped_vis = cv2.resize(warped, (1000, 630))
 
@@ -341,6 +343,11 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
 
             if debug_mask is not None:
                 debug_mask = _ensure_bgr(debug_mask)
+                if debug_mask.ndim == 2:
+                    debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+                debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+
+            if debug_mask is not None:
                 debug_resized = cv2.resize(debug_mask, (frame.shape[1], frame.shape[0]))
                 stacked = np.hstack((display_frame, debug_resized))
                 cv2.imshow("Live + Mask", stacked)
