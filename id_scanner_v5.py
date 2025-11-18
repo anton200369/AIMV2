@@ -79,6 +79,9 @@ def _build_card_mask(frame: np.ndarray) -> np.ndarray:
     # Edge emphasis from gradient + Canny
     grad_x = cv2.Sobel(norm, cv2.CV_32F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(norm, cv2.CV_32F, 0, 1, ksize=3)
+    grad = cv2.convertScaleAbs(
+        cv2.addWeighted(cv2.convertScaleAbs(grad_x), 0.5, cv2.convertScaleAbs(grad_y), 0.5, 0)
+    )
     grad = cv2.convertScaleAbs(cv2.addWeighted(cv2.convertScaleAbs(grad_x), 0.5, cv2.convertScaleAbs(grad_y), 0.5, 0))
     edges = cv2.Canny(norm, 40, 160)
     edge_mix = cv2.bitwise_or(edges, grad)
@@ -86,6 +89,9 @@ def _build_card_mask(frame: np.ndarray) -> np.ndarray:
     # Texture suppression to handle busy backgrounds
     adaptive = cv2.adaptiveThreshold(
         norm, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 35, 7
+    )
+    adaptive = cv2.morphologyEx(
+        adaptive, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)), iterations=2
     )
     adaptive = cv2.morphologyEx(adaptive, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)), iterations=2)
 
@@ -121,6 +127,7 @@ def _aspect_ratio_from_quad(pts: np.ndarray) -> float:
     return width / height
 
 
+def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.025) -> Optional[np.ndarray]:
 def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.02) -> Optional[np.ndarray]:
     mask = _build_card_mask(frame)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
