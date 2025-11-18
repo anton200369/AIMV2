@@ -33,8 +33,16 @@ This repository includes `id_scanner_v5.py`, a standalone version of the noteboo
     export CAM_INDEX=1
     export TESSERACT_CMD="/usr/bin/tesseract"  # adjust if needed
     ```
+1. Confirm your webcam is connected and note its index (default is `0`).
+2. (Optional) Set the camera index and Tesseract path via environment variables:
+   ```bash
+   export CAM_INDEX=0
+   export TESSERACT_CMD="/usr/bin/tesseract"  # adjust if needed
+   ```
 3. Launch the scanner:
    ```bash
    python id_scanner_v5.py
    ```
 4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector normalizes lighting, rejects glare/blur, and suppresses non-uniform backgrounds so the card contour remains stable on complex surfaces. It now uses solidity/extent scoring on contours plus sustained stability (roughly a dozen consecutive steady frames before capturing the front and about ten before MRZ OCR) and normalizes debug overlays to three channels to avoid OpenCV conversion errors on some webcams.
+4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector normalizes lighting, rejects glare/blur, and suppresses non-uniform backgrounds so the card contour remains stable on complex surfaces. The script also requires the contour to stay steady (position + area) across consecutive frames before capturing the front or moving to the MRZ stage, preventing false triggers from faces or nearby objects.
+4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector normalizes lighting, rejects glare/blur, and suppresses non-uniform backgrounds so the card contour remains stable on complex surfaces.

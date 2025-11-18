@@ -23,7 +23,7 @@ import pytesseract
 # Configuration
 # ---------------------------------------------------------------------------
 DEFAULT_TESSERACT_WIN = r"C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
-CAM_INDEX = int(os.getenv("CAM_INDEX", "1"))
+CAM_INDEX = int(os.getenv("CAM_INDEX", "0"))
 
 ROIS_FRONT: Dict[str, Tuple[float, float, float, float]] = {
     "Face": (0.18, 0.82, 0.04, 0.32),
@@ -82,6 +82,7 @@ def _build_card_mask(frame: np.ndarray) -> np.ndarray:
     grad = cv2.convertScaleAbs(
         cv2.addWeighted(cv2.convertScaleAbs(grad_x), 0.5, cv2.convertScaleAbs(grad_y), 0.5, 0)
     )
+    grad = cv2.convertScaleAbs(cv2.addWeighted(cv2.convertScaleAbs(grad_x), 0.5, cv2.convertScaleAbs(grad_y), 0.5, 0))
     edges = cv2.Canny(norm, 40, 160)
     edge_mix = cv2.bitwise_or(edges, grad)
 
@@ -92,6 +93,7 @@ def _build_card_mask(frame: np.ndarray) -> np.ndarray:
     adaptive = cv2.morphologyEx(
         adaptive, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)), iterations=2
     )
+    adaptive = cv2.morphologyEx(adaptive, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)), iterations=2)
 
     combined = cv2.bitwise_or(edge_mix, adaptive)
     combined = cv2.morphologyEx(
@@ -126,6 +128,7 @@ def _aspect_ratio_from_quad(pts: np.ndarray) -> float:
 
 
 def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.025) -> Optional[np.ndarray]:
+def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.02) -> Optional[np.ndarray]:
     mask = _build_card_mask(frame)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -133,28 +136,17 @@ def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.025) -> Optio
 
     h, w = frame.shape[:2]
     min_area = (h * w) * min_area_ratio
-
-    def _score(cnt: np.ndarray) -> float:
-        area = cv2.contourArea(cnt)
-        if area < min_area:
-            return -1
-        hull_area = cv2.contourArea(cv2.convexHull(cnt))
-        solidity = area / max(hull_area, 1e-6)
-        x, y, bw, bh = cv2.boundingRect(cnt)
-        extent = area / float(bw * bh)
-        return solidity + extent
-
-    contours = sorted(contours, key=_score, reverse=True)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
     for c in contours:
-        if _score(c) < 1.2:
+        if cv2.contourArea(c) < min_area:
             continue
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.018 * peri, True)
         if len(approx) == 4:
             aspect = _aspect_ratio_from_quad(approx.reshape(4, 2))
             # Accept typical landscape ID ratios and rotated cards
-            if 1.25 <= aspect <= 1.9 or 0.52 <= aspect <= 0.82:
+            if 1.2 <= aspect <= 1.95 or 0.5 <= aspect <= 0.85:
                 return approx.reshape(4, 2)
     return None
 
@@ -261,33 +253,28 @@ def detect_mrz_region(warped: np.ndarray) -> Tuple[Optional[Tuple[int, int, int,
 
 
 def _ensure_bgr(image: np.ndarray) -> np.ndarray:
-    """Return a 3-channel version of the image without cvtColor failures."""
+    """Return a 3-channel version of the image without crashing on already-color input."""
 
     if image is None:
         return image
 
     if image.ndim == 2:
-        return np.repeat(image[:, :, None], 3, axis=2)
+        try:
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        except cv2.error:
+            return np.dstack([image] * 3)
 
-    if image.ndim == 3:
-        channels = image.shape[2]
-        if channels == 1:
-            return np.repeat(image, 3, axis=2)
-        if channels == 4:
-            return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-        if channels >= 3:
-            return image[:, :, :3]
+    if image.ndim == 3 and image.shape[2] == 1:
+        try:
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        except cv2.error:
+            return np.dstack([image[:, :, 0]] * 3)
 
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if image.ndim == 3 and image.shape[2] == 1:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     return image
-
-
-def _stack_preview(display_frame: np.ndarray, debug_mask: Optional[np.ndarray]) -> np.ndarray:
-    if debug_mask is None:
-        return display_frame
-
-    mask_bgr = _ensure_bgr(debug_mask)
-    mask_resized = cv2.resize(mask_bgr, (display_frame.shape[1], display_frame.shape[0]))
-    return np.hstack((display_frame, mask_resized))
 
 
 def ocr_mrz(mrz_img: np.ndarray) -> str:
@@ -301,7 +288,6 @@ def ocr_mrz(mrz_img: np.ndarray) -> str:
 # ---------------------------------------------------------------------------
 # Main scanning loop
 # ---------------------------------------------------------------------------
-
 def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, np.ndarray | str]:
     configure_tesseract()
 
@@ -311,12 +297,9 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
 
     collected: Dict[str, np.ndarray | str] = {}
     state = "FRONT"
-    stabilize_frames = 0
-    mrz_lock_frames = 0
+    stabilize_count = 0
     last_card: Optional[Tuple[Tuple[float, float], float]] = None
-    FRONT_STABLE = 12
-    BACK_STABLE = 10
-    FLIP_STABLE = 45
+    REQUIRED_STABLE = 10
 
     print("📸 Scanner Ready. Show FRONT.")
 
@@ -343,11 +326,6 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                 else:
                     last_card = None
 
-            if stable_card:
-                stabilize_frames += 1
-            else:
-                stabilize_frames = 0
-
             if card_cnt is not None:
                 cv2.polylines(display_frame, [card_cnt.astype(int)], True, (0, 255, 0), 2)
                 warped = four_point_transform_landscape(orig, card_cnt)
@@ -358,38 +336,30 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                     display_frame[0:200, 0:320] = small_warped
                     cv2.putText(display_frame, "Scan FRONT", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
-                    if stabilize_frames >= FRONT_STABLE:
-                        collected.update(extract_front_regions(warped))
-                        state = "WAIT_FLIP"
-                        stabilize_frames = 0
+                    if stable_card:
+                        stabilize_count += 1
+                        if stabilize_count > REQUIRED_STABLE:
+                            collected.update(extract_front_regions(warped))
+                            state = "WAIT_FLIP"
+                            stabilize_count = 0
                     else:
-                        cv2.putText(
-                            display_frame,
-                            f"Hold steady ({stabilize_frames}/{FRONT_STABLE})",
-                            (330, 80),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7,
-                            (0, 255, 255),
-                            2,
-                        )
+                        stabilize_count = 0
+                        cv2.putText(display_frame, "Hold card steady", (330, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
                 elif state == "WAIT_FLIP":
                     cv2.putText(display_frame, "FLIP TO BACK...", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
-                    if stabilize_frames >= FLIP_STABLE:
-                        state = "BACK"
-                        stabilize_frames = 0
+                    if stable_card:
+                        stabilize_count += 1
+                        if stabilize_count > 40:
+                            state = "BACK"
+                            stabilize_count = 0
+                    else:
+                        stabilize_count = 0
 
                 elif state == "BACK":
-                    if stabilize_frames < BACK_STABLE:
-                        cv2.putText(
-                            display_frame,
-                            f"Hold steady ({stabilize_frames}/{BACK_STABLE})",
-                            (330, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7,
-                            (0, 255, 255),
-                            2,
-                        )
+                    if not stable_card:
+                        stabilize_count = 0
+                        cv2.putText(display_frame, "Hold card steady", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     else:
                         mrz_box, mrz_roi_img, debug_mask = detect_mrz_region(warped)
                         if debug_mask is not None:
@@ -401,15 +371,14 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                             (mx, my, mw, mh) = mrz_box
                             cv2.rectangle(warped_vis, (mx, my), (mx + mw, my + mh), (0, 255, 0), 3)
                             cv2.putText(display_frame, "MRZ FOUND!", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                            mrz_lock_frames += 1
-                            if mrz_lock_frames > 5 and mrz_roi_img is not None:
+                            stabilize_count += 1
+                            if stabilize_count > 5 and mrz_roi_img is not None:
                                 text = ocr_mrz(mrz_roi_img)
                                 if "<<" in text and len(text) > 15:
                                     collected["MRZ_Image"] = mrz_roi_img
                                     collected["MRZ_Text"] = text
                                     state = "DONE"
                         else:
-                            mrz_lock_frames = 0
                             cv2.putText(
                                 display_frame,
                                 "Searching MRZ...",
@@ -419,19 +388,79 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                                 (0, 0, 255),
                                 2,
                             )
+                            stabilize_count = 0
 
                         small_warped = cv2.resize(warped_vis, (320, 200))
                         display_frame[0:200, 0:320] = small_warped
             else:
-                stabilize_frames = 0
+                stabilize_count = 0
                 if card_cnt is None:
                     last_card = None
+                    stabilize_count += 1
+                    if stabilize_count > REQUIRED_STABLE:
+                        collected.update(extract_front_regions(warped))
+                        state = "WAIT_FLIP"
+                        stabilize_count = 0
+
+                elif state == "WAIT_FLIP":
+                    cv2.putText(display_frame, "FLIP TO BACK...", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+                    stabilize_count += 1
+                    if stabilize_count > 40:
+                        state = "BACK"
+                        stabilize_count = 0
+
+                elif state == "BACK":
+                    mrz_box, mrz_roi_img, debug_mask = detect_mrz_region(warped)
+                    if debug_mask is not None:
+                        debug_mask = _ensure_bgr(debug_mask)
+                    if debug_mask is not None and debug_mask.ndim == 2:
+                        debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+
+                    warped_vis = cv2.resize(warped, (1000, 630))
+
+                    if mrz_box is not None:
+                        (mx, my, mw, mh) = mrz_box
+                        cv2.rectangle(warped_vis, (mx, my), (mx + mw, my + mh), (0, 255, 0), 3)
+                        cv2.putText(display_frame, "MRZ FOUND!", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        stabilize_count += 1
+                        if stabilize_count > 5 and mrz_roi_img is not None:
+                            text = ocr_mrz(mrz_roi_img)
+                            if "<<" in text and len(text) > 15:
+                                collected["MRZ_Image"] = mrz_roi_img
+                                collected["MRZ_Text"] = text
+                                state = "DONE"
+                    else:
+                        cv2.putText(
+                            display_frame,
+                            "Searching MRZ...",
+                            (330, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 0, 255),
+                            2,
+                        )
+                        stabilize_count = 0
+
+                    small_warped = cv2.resize(warped_vis, (320, 200))
+                    display_frame[0:200, 0:320] = small_warped
+            else:
+                stabilize_count = 0
 
             if show_debug_mask and card_cnt is None:
                 debug_mask = _build_card_mask(frame)
 
-            stacked = _stack_preview(display_frame, debug_mask)
-            cv2.imshow("Live" if debug_mask is None else "Live + Mask", stacked)
+            if debug_mask is not None:
+                debug_mask = _ensure_bgr(debug_mask)
+                if debug_mask.ndim == 2:
+                    debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+                debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+
+            if debug_mask is not None:
+                debug_resized = cv2.resize(debug_mask, (frame.shape[1], frame.shape[0]))
+                stacked = np.hstack((display_frame, debug_resized))
+                cv2.imshow("Live + Mask", stacked)
+            else:
+                cv2.imshow("Live", display_frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -446,6 +475,7 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
         cv2.destroyAllWindows()
 
     return collected
+
 
 def main() -> int:
     try:
