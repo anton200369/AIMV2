@@ -263,6 +263,10 @@ def _ensure_bgr(image: np.ndarray) -> np.ndarray:
         except cv2.error:
             return np.dstack([image[:, :, 0]] * 3)
 
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if image.ndim == 3 and image.shape[2] == 1:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     return image
 
 
@@ -385,12 +389,66 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                 stabilize_count = 0
                 if card_cnt is None:
                     last_card = None
+                    stabilize_count += 1
+                    if stabilize_count > REQUIRED_STABLE:
+                        collected.update(extract_front_regions(warped))
+                        state = "WAIT_FLIP"
+                        stabilize_count = 0
+
+                elif state == "WAIT_FLIP":
+                    cv2.putText(display_frame, "FLIP TO BACK...", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+                    stabilize_count += 1
+                    if stabilize_count > 40:
+                        state = "BACK"
+                        stabilize_count = 0
+
+                elif state == "BACK":
+                    mrz_box, mrz_roi_img, debug_mask = detect_mrz_region(warped)
+                    if debug_mask is not None:
+                        debug_mask = _ensure_bgr(debug_mask)
+                    if debug_mask is not None and debug_mask.ndim == 2:
+                        debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+
+                    warped_vis = cv2.resize(warped, (1000, 630))
+
+                    if mrz_box is not None:
+                        (mx, my, mw, mh) = mrz_box
+                        cv2.rectangle(warped_vis, (mx, my), (mx + mw, my + mh), (0, 255, 0), 3)
+                        cv2.putText(display_frame, "MRZ FOUND!", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        stabilize_count += 1
+                        if stabilize_count > 5 and mrz_roi_img is not None:
+                            text = ocr_mrz(mrz_roi_img)
+                            if "<<" in text and len(text) > 15:
+                                collected["MRZ_Image"] = mrz_roi_img
+                                collected["MRZ_Text"] = text
+                                state = "DONE"
+                    else:
+                        cv2.putText(
+                            display_frame,
+                            "Searching MRZ...",
+                            (330, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 0, 255),
+                            2,
+                        )
+                        stabilize_count = 0
+
+                    small_warped = cv2.resize(warped_vis, (320, 200))
+                    display_frame[0:200, 0:320] = small_warped
+            else:
+                stabilize_count = 0
 
             if show_debug_mask and card_cnt is None:
                 debug_mask = _build_card_mask(frame)
 
             if debug_mask is not None:
                 debug_mask = _ensure_bgr(debug_mask)
+                if debug_mask.ndim == 2:
+                    debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+                debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
+
+            if debug_mask is not None:
                 debug_resized = cv2.resize(debug_mask, (frame.shape[1], frame.shape[0]))
                 stacked = np.hstack((display_frame, debug_resized))
                 cv2.imshow("Live + Mask", stacked)
