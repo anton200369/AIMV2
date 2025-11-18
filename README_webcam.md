@@ -37,4 +37,5 @@ This repository includes `id_scanner_v5.py`, a standalone version of the noteboo
    ```bash
    python id_scanner_v5.py
    ```
+4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector normalizes lighting, rejects glare/blur, and suppresses non-uniform backgrounds so the card contour remains stable on complex surfaces. The script also requires the contour to stay steady (position + area) across consecutive frames before capturing the front or moving to the MRZ stage, preventing false triggers from faces or nearby objects.
 4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector normalizes lighting, rejects glare/blur, and suppresses non-uniform backgrounds so the card contour remains stable on complex surfaces.

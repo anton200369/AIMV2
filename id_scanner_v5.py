@@ -144,6 +144,21 @@ def find_card_contour(frame: np.ndarray, min_area_ratio: float = 0.02) -> Option
     return None
 
 
+def _contour_metrics(cnt: np.ndarray, frame_shape: Tuple[int, int, int]) -> Tuple[Tuple[float, float], float]:
+    x, y, w, h = cv2.boundingRect(cnt.astype(int))
+    center = (x + w / 2.0, y + h / 2.0)
+    area_ratio = (w * h) / float(frame_shape[0] * frame_shape[1])
+    return center, area_ratio
+
+
+def _is_stable(curr: Tuple[Tuple[float, float], float], prev: Tuple[Tuple[float, float], float]) -> bool:
+    (cx, cy), area = curr
+    (px, py), p_area = prev
+    dist = np.hypot(cx - px, cy - py)
+    area_diff = abs(area - p_area) / max(p_area, 1e-6)
+    return dist <= 18 and area_diff <= 0.25
+
+
 def four_point_transform_landscape(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
     rect = _order_points(pts)
     (tl, tr, br, bl) = rect
@@ -233,6 +248,21 @@ def detect_mrz_region(warped: np.ndarray) -> Tuple[Optional[Tuple[int, int, int,
 def _ensure_bgr(image: np.ndarray) -> np.ndarray:
     """Return a 3-channel version of the image without crashing on already-color input."""
 
+    if image is None:
+        return image
+
+    if image.ndim == 2:
+        try:
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        except cv2.error:
+            return np.dstack([image] * 3)
+
+    if image.ndim == 3 and image.shape[2] == 1:
+        try:
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        except cv2.error:
+            return np.dstack([image[:, :, 0]] * 3)
+
     if image.ndim == 2:
         return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     if image.ndim == 3 and image.shape[2] == 1:
@@ -261,6 +291,7 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
     collected: Dict[str, np.ndarray | str] = {}
     state = "FRONT"
     stabilize_count = 0
+    last_card: Optional[Tuple[Tuple[float, float], float]] = None
     REQUIRED_STABLE = 10
 
     print("📸 Scanner Ready. Show FRONT.")
@@ -278,6 +309,16 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
             display_frame = frame.copy()
             debug_mask = None
 
+            stable_card = False
+            if card_cnt is not None:
+                metrics = _contour_metrics(card_cnt, frame.shape)
+                last_card_area_ok = 0.035 <= metrics[1] <= 0.55
+                if last_card_area_ok:
+                    stable_card = last_card is None or _is_stable(metrics, last_card)
+                    last_card = metrics
+                else:
+                    last_card = None
+
             if card_cnt is not None:
                 cv2.polylines(display_frame, [card_cnt.astype(int)], True, (0, 255, 0), 2)
                 warped = four_point_transform_landscape(orig, card_cnt)
@@ -288,6 +329,66 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                     display_frame[0:200, 0:320] = small_warped
                     cv2.putText(display_frame, "Scan FRONT", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
+                    if stable_card:
+                        stabilize_count += 1
+                        if stabilize_count > REQUIRED_STABLE:
+                            collected.update(extract_front_regions(warped))
+                            state = "WAIT_FLIP"
+                            stabilize_count = 0
+                    else:
+                        stabilize_count = 0
+                        cv2.putText(display_frame, "Hold card steady", (330, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+                elif state == "WAIT_FLIP":
+                    cv2.putText(display_frame, "FLIP TO BACK...", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+                    if stable_card:
+                        stabilize_count += 1
+                        if stabilize_count > 40:
+                            state = "BACK"
+                            stabilize_count = 0
+                    else:
+                        stabilize_count = 0
+
+                elif state == "BACK":
+                    if not stable_card:
+                        stabilize_count = 0
+                        cv2.putText(display_frame, "Hold card steady", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    else:
+                        mrz_box, mrz_roi_img, debug_mask = detect_mrz_region(warped)
+                        if debug_mask is not None:
+                            debug_mask = _ensure_bgr(debug_mask)
+
+                        warped_vis = cv2.resize(warped, (1000, 630))
+
+                        if mrz_box is not None:
+                            (mx, my, mw, mh) = mrz_box
+                            cv2.rectangle(warped_vis, (mx, my), (mx + mw, my + mh), (0, 255, 0), 3)
+                            cv2.putText(display_frame, "MRZ FOUND!", (330, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                            stabilize_count += 1
+                            if stabilize_count > 5 and mrz_roi_img is not None:
+                                text = ocr_mrz(mrz_roi_img)
+                                if "<<" in text and len(text) > 15:
+                                    collected["MRZ_Image"] = mrz_roi_img
+                                    collected["MRZ_Text"] = text
+                                    state = "DONE"
+                        else:
+                            cv2.putText(
+                                display_frame,
+                                "Searching MRZ...",
+                                (330, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7,
+                                (0, 0, 255),
+                                2,
+                            )
+                            stabilize_count = 0
+
+                        small_warped = cv2.resize(warped_vis, (320, 200))
+                        display_frame[0:200, 0:320] = small_warped
+            else:
+                stabilize_count = 0
+                if card_cnt is None:
+                    last_card = None
                     stabilize_count += 1
                     if stabilize_count > REQUIRED_STABLE:
                         collected.update(extract_front_regions(warped))
