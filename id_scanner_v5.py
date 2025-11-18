@@ -230,6 +230,16 @@ def detect_mrz_region(warped: np.ndarray) -> Tuple[Optional[Tuple[int, int, int,
     return roi_box, roi_img, thresh
 
 
+def _ensure_bgr(image: np.ndarray) -> np.ndarray:
+    """Return a 3-channel version of the image without crashing on already-color input."""
+
+    if image.ndim == 2:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    if image.ndim == 3 and image.shape[2] == 1:
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    return image
+
+
 def ocr_mrz(mrz_img: np.ndarray) -> str:
     gray_roi = cv2.cvtColor(mrz_img, cv2.COLOR_BGR2GRAY)
     binary = cv2.threshold(gray_roi, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
@@ -293,6 +303,8 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
 
                 elif state == "BACK":
                     mrz_box, mrz_roi_img, debug_mask = detect_mrz_region(warped)
+                    if debug_mask is not None:
+                        debug_mask = _ensure_bgr(debug_mask)
                     if debug_mask is not None and debug_mask.ndim == 2:
                         debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
 
@@ -330,6 +342,7 @@ def run_scanner(cam_index: int = 0, show_debug_mask: bool = False) -> Dict[str, 
                 debug_mask = _build_card_mask(frame)
 
             if debug_mask is not None:
+                debug_mask = _ensure_bgr(debug_mask)
                 if debug_mask.ndim == 2:
                     debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
                 debug_mask = cv2.cvtColor(debug_mask, cv2.COLOR_GRAY2BGR)
