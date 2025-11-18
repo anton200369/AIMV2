@@ -1,6 +1,6 @@
-# Webcam MRZ Scanner
+# Webcam MRZ Scanner (Notebook V5 as a script)
 
-This repository includes `webcam_mrz_scanner.py`, a standalone script extracted from the notebook to scan ID cards via your computer's webcam instead of an external mobile camera.
+This repository includes `id_scanner_v5.py`, a standalone version of the notebook logic that scans ID cards via your computer's webcam. It now normalizes lighting, suppresses busy backgrounds, and keeps the original FRONT/BACK flow for region capture and MRZ OCR.
 
 ## Requirements
 
@@ -28,14 +28,13 @@ This repository includes `webcam_mrz_scanner.py`, a standalone script extracted 
 ## Running the scanner
 
 1. Confirm your webcam is connected and note its index (default is `0`).
-2. (Optional) Set the camera index, Tesseract path, and face cascade override via environment variables:
+2. (Optional) Set the camera index and Tesseract path via environment variables:
    ```bash
    export CAM_INDEX=0
    export TESSERACT_CMD="/usr/bin/tesseract"  # adjust if needed
-   export FACE_CASCADE_PATH="/path/to/haarcascade_frontalface_default.xml"  # only if OpenCV's bundled cascade is missing
    ```
 3. Launch the scanner:
    ```bash
-   python webcam_mrz_scanner.py
+   python id_scanner_v5.py
    ```
-4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector now normalizes lighting and suppresses busy backgrounds automatically, so it can find cards even when the surface behind the document is not uniform.
+4. Place the ID card in view; the preview window will outline the detected card and stop once a plausible MRZ is read. Press `q` to exit early. The detector normalizes lighting, rejects glare/blur, and suppresses non-uniform backgrounds so the card contour remains stable on complex surfaces.
